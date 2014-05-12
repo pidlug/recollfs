@@ -13,10 +13,16 @@ Prerequisities:
 - Maybe more is needed, just check the imports at the beginning of the program.
 
 Usage:
-- directly from shell:
-recollfs -o index=~.recoll ~/mysearches
 
-- using fstab:
-#recollfs  <mountpoint>  fuse  rw,allow_other,index=<index direcory>  0 0
-recollfs  /mnt/search  fuse  rw,allow_other,index=/home/.recoll  0 0
+Mounting of the filesystem
+  - directly from shell:
+    recollfs -o index=~.recoll ~/mysearches
 
+  - using fstab:
+    #recollfs  <mountpoint>  fuse  rw,allow_other,index=<index direcory>  0 0
+    recollfs  /mnt/search  fuse  rw,allow_other,index=/home/.recoll  0 0
+
+Searching
+  - just make a directory with a name which is a query, e.g:
+    mkdir ~/mysearches/"nice flowers"
+  - all the files matching the query will be symlinked inside this directory
