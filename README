@@ -1,0 +1,22 @@
+RecollFs - FUSE filesystem using Recoll index, showing filtered files in directories.
+
+Installation:
+Just place the recollfs file in the path and make it executable (e.g. in /usr/local/sbin or /usr/local/bin).
+
+Prerequisities:
+- Python 2
+- RECALL: you should have an recoll index available. Standard location is: ~/.recollfs.
+  It is possible to build the index with command line only utility: recollindex.
+  In Debian you need recoll and python-recall packages.
+  Due to differences in python-recall API, it may not work with newer versions of python-recall.
+- FUSE: python-fuse package.
+- Maybe more is needed, just check the imports at the beginning of the program.
+
+Usage:
+- directly from shell:
+recollfs -o index=~.recoll ~/mysearches
+
+- using fstab:
+#recollfs  <mountpoint>  fuse  rw,allow_other,index=<index direcory>  0 0
+recollfs  /mnt/search  fuse  rw,allow_other,index=/home/.recoll  0 0
+
