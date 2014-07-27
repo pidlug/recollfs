@@ -16,7 +16,10 @@ import fuse
 from fuse import Fuse
 import errno
 from stat import *
-import recoll
+try:
+    from recoll import recoll
+except:
+    import recoll
 import time
 import urllib
 import os
