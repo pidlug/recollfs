@@ -48,35 +48,51 @@ class RecollClient(Logger):
         self.rdb=recoll.connect(index)
         self.rquery = self.rdb.query()
 
-        self.cached_time = 0
-        self.cached_string = ''
-        self.cached_hits = []
-
     def query(self, qstring):
-        current_time = time.time()
-        if current_time - self.cached_time < 100 and qstring == self.cached_string:
-            return self.cached_hits
-        else:
-            results = self.rquery.execute(qstring)
-            hits = []
-            for i in range(results):
-              try:
-                doc = self.rquery.fetchone()
-                result = urllib.url2pathname(doc.url[7:]).encode("utf-8")
-                shortname = doc.filename.encode("utf-8")
-                uniq = 0
-                possible_name = shortname
-                while filter(lambda x: x['name'] == possible_name, hits):
-                    uniq += 1
-                    possible_name = shortname + ' (' + str(uniq) + ')'
-                hits.append({'name': possible_name, 'link': result})
-              except Exception as exc:
-                self.log_error(str(exc))
+        results = self.rquery.execute(qstring)
+        hits = {}
+        for i in range(results):
+          try:
+            doc = self.rquery.fetchone()
+            result = urllib.url2pathname(doc.url[7:]).encode("utf-8", 'ignore')
+            shortname = os.path.basename(result)
+            #print "url: '%s', result: '%s', shortname: '%s'"% (doc.url.encode("utf-8", 'ignore'), result, shortname)
+            uniq = 0
+            possible_name = shortname
+            while possible_name in hits:
+              uniq += 1
+              possible_name = "%s (%s)" % (shortname, str(uniq))
+            hits[possible_name] = result
+          except Exception as exc:
+            self.log_error(str(exc))
 
-            self.cached_time = current_time
-            self.cached_string = qstring
-            self.cached_hits = hits
-            return hits
+        return hits
+
+
+class directory(object):
+
+  def __init__(self, name, cache_time = 300):
+    self.name = name
+    self.time = 0
+    self.cache_time = cache_time
+    self.contents = {}
+
+  def read(self, query_function):
+    current_time = time.time()
+
+    # check if cache is not expired and we have the directory contents 
+    # if not read it using the function provided as argument
+    if current_time - self.time > self.cache_time or not self.contents:
+      self.contents = query_function(self.name)
+      self.time = time.time()
+
+    #print "directory.read - %i" % len(self.contents)
+    return self.contents
+
+  def getfile(self, name):
+    # return single file name from cached contents or None if not found
+    return self.contents.get(name, None)
+
 
 class Recollfs(Fuse, Logger):
 
@@ -84,6 +100,7 @@ class Recollfs(Fuse, Logger):
         Fuse.__init__(self, *args, **kw)
         self.index = ""
         self.dirs = {}
+        self.tclient = None
 
     def main(self, *args, **kw):
         self.tclient = RecollClient(self.index)
@@ -95,39 +112,35 @@ class Recollfs(Fuse, Logger):
             but it won't always be
         FIXME: sloppy checking for this
         """
+        linkedname = None
         try:
           qstring = path[1:path.rindex('/')]
           filename = path[path.rindex('/')+1:]
-          hits = self.tclient.query(qstring)
-          self.log_debug("hit_target, path: " + path + " qstring: " + qstring)
+          linkedname = self.dirs[qstring].getfile(filename)
         except Exception as exc:
           self.log_error(str(exc))
-          hits = []
-
-        matches = [x['link'] for x in hits if x['name'] == filename]
-        if matches != []:
-            return matches[0]
-        else:
-            return None
+          pass
+        self.log_debug("hit_target '%s': '%s'" % (filename, linkedname))
+        return linkedname
 
     def get_hits(self, qstring):
         """
         TODO: if it's not needed anywhere else, fold into readdir
         """
-        hits = self.tclient.query(qstring)
-        self.log_debug("hit_target: " + qstring)
-        return [x['name'] for x in hits]
+        hits = self.dirs[qstring].read(self.tclient.query)
+        self.log_debug("get_hits: '%s', count: %i " % (qstring, len(hits)))
+        return hits.keys()
 
     def getattr(self, path):
         st = fuse.Stat()
-        self.log_debug("hit_target: " + path)
+        self.log_debug("getattr: '%s'" % path)
         if path == '/' or self.dirs.has_key(path[1:]):
             st.st_mode = S_IFDIR | S_IRWXU | S_IRWXG | S_IRWXO
             st.st_nlink = 2
         else:
             linkedfile = self.hit_target(path)
             if linkedfile != None:
-               self.log_debug("linked_file: " + linkedfile)
+               self.log_debug("getattr file: '%s'" % linkedfile)
                st1 = os.lstat(linkedfile)
                st.st_nlink = 1
                st.st_mode = S_IFLNK | st1.st_mode & 4095
@@ -136,15 +149,17 @@ class Recollfs(Fuse, Logger):
                st.st_mtime = st1.st_mtime
                st.st_ctime = st1.st_ctime
             else:
+               self.log_error("getattr error")
                return -errno.ENOENT
         return st
 
     def readlink(self, path):
         target = self.hit_target(path)
+        self.log_debug("readlink file: '%s'" % target)
         if target != None:
             return target
         else:
-            e = OSError("Not a link"+path)
+            e = OSError("readlink Not a link '%s'" % path)
             e.errno = EINVAL
             raise e
 
@@ -165,7 +180,7 @@ class Recollfs(Fuse, Logger):
     def mkdir(self, path, mode):
         new_dir = path[1:]
         if (self.dirs.has_key(new_dir) == False) and (len(new_dir) > 0) and (new_dir.find('/') == -1):
-            self.dirs[new_dir] = new_dir
+            self.dirs[new_dir] = directory(new_dir)
 
     def rename(self, path, path1):
         new_dir = path1[1:]
@@ -173,7 +188,7 @@ class Recollfs(Fuse, Logger):
         if (self.dirs.has_key(new_dir) == False) and (len(new_dir) > 0) and (new_dir.find('/') == -1):
             try:
                 del self.dirs[old_dir]
-                self.dirs[new_dir] = new_dir
+                self.dirs[new_dir] = directory(new_dir)
             except Exception as exc:
                 self.log_error(str(exc))
                 return # FIXME: return an error!
